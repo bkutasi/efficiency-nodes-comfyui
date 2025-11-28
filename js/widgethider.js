@@ -1,396 +1,322 @@
 import { app } from "../../scripts/app.js";
 
-const findWidgetByName = (node, name) => {
-    return node.widgets ? node.widgets.find((w) => w.name === name) : null;
-};
-
-const doesInputWithNameExist = (node, name) => {
-    // return node.inputs ? node.inputs.some((input) => input.name === name) : false;
-    return false;
-};
-
 const HIDDEN_TAG = "tschide";
-// Toggle Widget + change size
-function toggleWidget(node, widget, show = false, suffix = "", resize = true) {
-    if (!widget || doesInputWithNameExist(node, widget.name)) return;
 
-    // Store the original properties of the widget if not already stored
+// --- Utility Functions ---
+
+const findWidget = (node, name) => node.widgets?.find((w) => w.name === name);
+
+const toggleWidget = (node, widget, show) => {
+    if (!widget) return;
+
+    // Store original properties
     if (!widget.origProps) {
         widget.origProps = {
-            origType: widget.type,
-            origComputeSize: widget.computeSize,
-            origDraw: widget.draw,
+            type: widget.type,
+            computeSize: widget.computeSize,
+            draw: widget.draw,
         };
     }
 
-    const origSize = node.size;
+    const isVisible = widget.type !== HIDDEN_TAG;
+    if (isVisible === show) return;
 
-    // Set the widget type and computeSize based on the show flag
-    widget.type = show ? widget.origProps.origType : HIDDEN_TAG + suffix;
-    widget.computeSize = show
-        ? widget.origProps.origComputeSize
-        : () => [0, -4];
-    widget.draw = show ? widget.origProps.origDraw : () => {};
-
-    // Recursively handle linked widgets if they exist
-    widget.linkedWidgets?.forEach((w) =>
-        toggleWidget(node, w, ":" + widget.name, show, resize),
-    );
-
-    // Calculate the new height for the node based on its computeSize method
-    if (resize) {
-        const newHeight = node.computeSize()[1];
-        node.setSize([node.size[0], newHeight]);
-        app.graph?.setDirtyCanvas(true, true);
-    }
-}
-
-const WIDGET_HEIGHT = 24;
-// Use for Multiline Widget Nodes (aka Efficient Loaders)
-function toggleWidget_2(node, widget, show = false, suffix = "") {
-    if (!widget || doesInputWithNameExist(node, widget.name)) return;
-
-    const isCurrentlyVisible = widget.type !== HIDDEN_TAG + suffix;
-    if (isCurrentlyVisible === show) return; // Early exit if widget is already in the desired state
-
-    if (!widget.origProps) {
-        widget.origProps = {
-            origType: widget.type,
-            origComputeSize: widget.computeSize,
-            origDraw: widget.draw,
-        };
+    if (show) {
+        widget.type = widget.origProps.type;
+        widget.computeSize = widget.origProps.computeSize;
+        widget.draw = widget.origProps.draw;
+    } else {
+        widget.type = HIDDEN_TAG;
+        widget.computeSize = () => [0, -4];
+        widget.draw = () => {};
     }
 
-    widget.type = show ? widget.origProps.origType : HIDDEN_TAG + suffix;
-    widget.computeSize = show
-        ? widget.origProps.origComputeSize
-        : () => [0, -4];
-    widget.draw = show ? widget.origProps.origDraw : () => {};
+    // Handle linked widgets recursively
+    widget.linkedWidgets?.forEach((w) => toggleWidget(node, w, show));
+};
 
-    const adjustment = show ? WIDGET_HEIGHT : -WIDGET_HEIGHT;
-    node.setSize([node.size[0], node.size[1] + adjustment]);
-    app.graph?.setDirtyCanvas(true, true);
-}
-
-// New function to handle widget visibility based on input_mode
-function handleInputModeWidgetsVisibility(node, inputModeValue) {
-    // Utility function to generate widget names up to a certain count
-    function generateWidgetNames(baseName, count) {
-        return Array.from({ length: count }, (_, i) => `${baseName}_${i + 1}`);
-    }
-
-    // Common widget groups
-    const batchWidgets = [
-        "batch_path",
-        "subdirectories",
-        "batch_sort",
-        "batch_max",
-    ];
-    const xbatchWidgets = [
-        "X_batch_path",
-        "X_subdirectories",
-        "X_batch_sort",
-        "X_batch_max",
-    ];
-    const ckptWidgets = [...generateWidgetNames("ckpt_name", 50)];
-    const clipSkipWidgets = [...generateWidgetNames("clip_skip", 50)];
-    const vaeNameWidgets = [...generateWidgetNames("vae_name", 50)];
-    const loraNameWidgets = [...generateWidgetNames("lora_name", 50)];
-    const loraWtWidgets = [...generateWidgetNames("lora_wt", 50)];
-    const modelStrWidgets = [...generateWidgetNames("model_str", 50)];
-    const clipStrWidgets = [...generateWidgetNames("clip_str", 50)];
-    const xWidgets = ["X_batch_count", "X_first_value", "X_last_value"];
-    const yWidgets = ["Y_batch_count", "Y_first_value", "Y_last_value"];
-
-    const nodeVisibilityMap = {
-        "XY Input: Steps": {
-            steps: [
-                "first_start_step",
-                "last_start_step",
-                "first_end_step",
-                "last_end_step",
-                "first_refine_step",
-                "last_refine_step",
-            ],
-            start_at_step: [
-                "first_step",
-                "last_step",
-                "first_end_step",
-                "last_end_step",
-                "first_refine_step",
-                "last_refine_step",
-            ],
-            end_at_step: [
-                "first_step",
-                "last_step",
-                "first_start_step",
-                "last_start_step",
-                "first_refine_step",
-                "last_refine_step",
-            ],
-            refine_at_step: [
-                "first_step",
-                "last_step",
-                "first_start_step",
-                "last_start_step",
-                "first_end_step",
-                "last_end_step",
-            ],
-        },
-        "XY Input: VAE": {
-            "VAE Names": [...batchWidgets],
-            "VAE Batch": [...vaeNameWidgets, "vae_count"],
-        },
-        "XY Input: Checkpoint": {
-            "Ckpt Names": [
-                ...clipSkipWidgets,
-                ...vaeNameWidgets,
-                ...batchWidgets,
-            ],
-            "Ckpt Names+ClipSkip": [...vaeNameWidgets, ...batchWidgets],
-            "Ckpt Names+ClipSkip+VAE": [...batchWidgets],
-            "Checkpoint Batch": [
-                ...ckptWidgets,
-                ...clipSkipWidgets,
-                ...vaeNameWidgets,
-                "ckpt_count",
-            ],
-        },
-        "XY Input: LoRA": {
-            "LoRA Names": [
-                ...modelStrWidgets,
-                ...clipStrWidgets,
-                ...batchWidgets,
-            ],
-            "LoRA Names+Weights": [
-                ...batchWidgets,
-                "model_strength",
-                "clip_strength",
-            ],
-            "LoRA Batch": [
-                ...loraNameWidgets,
-                ...modelStrWidgets,
-                ...clipStrWidgets,
-                "lora_count",
-            ],
-        },
-        "XY Input: LoRA Plot": {
-            "X: LoRA Batch, Y: LoRA Weight": [
-                "lora_name",
-                "model_strength",
-                "clip_strength",
-                "X_first_value",
-                "X_last_value",
-            ],
-            "X: LoRA Batch, Y: Model Strength": [
-                "lora_name",
-                "model_strength",
-                "model_strength",
-                "X_first_value",
-                "X_last_value",
-            ],
-            "X: LoRA Batch, Y: Clip Strength": [
-                "lora_name",
-                "clip_strength",
-                "X_first_value",
-                "X_last_value",
-            ],
-            "X: Model Strength, Y: Clip Strength": [
-                ...xbatchWidgets,
-                "model_strength",
-                "clip_strength",
-            ],
-        },
-        "XY Input: Control Net": {
-            strength: [
-                "first_start_percent",
-                "last_start_percent",
-                "first_end_percent",
-                "last_end_percent",
-                "strength",
-            ],
-            start_percent: [
-                "first_strength",
-                "last_strength",
-                "first_end_percent",
-                "last_end_percent",
-                "start_percent",
-            ],
-            end_percent: [
-                "first_strength",
-                "last_strength",
-                "first_start_percent",
-                "last_start_percent",
-                "end_percent",
-            ],
-        },
-        "XY Input: Control Net Plot": {
-            "X: Strength, Y: Start%": ["strength", "start_percent"],
-            "X: Strength, Y: End%": ["strength", "end_percent"],
-            "X: Start%, Y: Strength": ["start_percent", "strength"],
-            "X: Start%, Y: End%": ["start_percent", "end_percent"],
-            "X: End%, Y: Strength": ["end_percent", "strength"],
-            "X: End%, Y: Start%": ["end_percent", "start_percent"],
-        },
-    };
-
-    const inputModeVisibilityMap = nodeVisibilityMap[node.comfyClass];
-
-    if (!inputModeVisibilityMap || !inputModeVisibilityMap[inputModeValue])
-        return;
-
-    // Reset all widgets to visible
-    for (const key in inputModeVisibilityMap) {
-        for (const widgetName of inputModeVisibilityMap[key]) {
-            const widget = findWidgetByName(node, widgetName);
-            toggleWidget(node, widget, true, "", false);
-        }
-    }
-
-    // Hide the specific widgets for the current input_mode value
-    for (const widgetName of inputModeVisibilityMap[inputModeValue]) {
-        const widget = findWidgetByName(node, widgetName);
-        toggleWidget(node, widget, false, "", false);
-    }
-
+const resizeNode = (node) => {
     const newHeight = node.computeSize()[1];
     node.setSize([node.size[0], newHeight]);
     app.graph?.setDirtyCanvas(true, true);
+};
+
+const updateGroupVisibility = (node, map, key) => {
+    if (!map) return;
+    const allWidgets = new Set(Object.values(map).flat());
+    const visibleWidgets = new Set(map[key] || []);
+    allWidgets.forEach((name) => {
+        toggleWidget(node, findWidget(node, name), visibleWidgets.has(name));
+    });
+    resizeNode(node);
+};
+
+function ensureSeedControl(node, callback, attempts = 0) {
+    if (node.seedControl && node.seedControl.lastSeedButton) {
+        callback(node.seedControl.lastSeedButton);
+    } else if (attempts < 20) {
+        setTimeout(() => ensureSeedControl(node, callback, attempts + 1), 100);
+    }
 }
 
-// Handle multi-widget visibilities
-function handleVisibility(node, countValue, node_type) {
-    countValue = parseInt(countValue, 10);
-    const inputModeValue = findWidgetByName(node, "input_mode").value;
-    const baseNamesMap = {
+// --- Data Generators & Constants ---
+
+const gen = (base, count) =>
+    Array.from({ length: count }, (_, i) => `${base}_${i + 1}`);
+
+const BATCH = ["batch_path", "subdirectories", "batch_sort", "batch_max"];
+const X_BATCH = [
+    "X_batch_path",
+    "X_subdirectories",
+    "X_batch_sort",
+    "X_batch_max",
+];
+const CKPT = gen("ckpt_name", 50);
+const CLIP = gen("clip_skip", 50);
+const VAE = gen("vae_name", 50);
+const LORA = gen("lora_name", 50);
+const L_WT = gen("lora_wt", 50);
+const M_STR = gen("model_str", 50);
+const C_STR = gen("clip_str", 50);
+
+const VISIBILITY_MAPS = {
+    "XY Input: Steps": {
+        steps: [
+            "first_start_step",
+            "last_start_step",
+            "first_end_step",
+            "last_end_step",
+            "first_refine_step",
+            "last_refine_step",
+        ],
+        start_at_step: [
+            "first_step",
+            "last_step",
+            "first_end_step",
+            "last_end_step",
+            "first_refine_step",
+            "last_refine_step",
+        ],
+        end_at_step: [
+            "first_step",
+            "last_step",
+            "first_start_step",
+            "last_start_step",
+            "first_refine_step",
+            "last_refine_step",
+        ],
+        refine_at_step: [
+            "first_step",
+            "last_step",
+            "first_start_step",
+            "last_start_step",
+            "first_end_step",
+            "last_end_step",
+        ],
+    },
+    "XY Input: VAE": {
+        "VAE Names": BATCH,
+        "VAE Batch": [...VAE, "vae_count"],
+    },
+    "XY Input: Checkpoint": {
+        "Ckpt Names": [...CLIP, ...VAE, ...BATCH],
+        "Ckpt Names+ClipSkip": [...VAE, ...BATCH],
+        "Ckpt Names+ClipSkip+VAE": BATCH,
+        "Checkpoint Batch": [...CKPT, ...CLIP, ...VAE, "ckpt_count"],
+    },
+    "XY Input: LoRA": {
+        "LoRA Names": [...M_STR, ...C_STR, ...BATCH],
+        "LoRA Names+Weights": [...BATCH, "model_strength", "clip_strength"],
+        "LoRA Batch": [...LORA, ...M_STR, ...C_STR, "lora_count"],
+    },
+    "XY Input: LoRA Plot": {
+        "X: LoRA Batch, Y: LoRA Weight": [
+            "lora_name",
+            "model_strength",
+            "clip_strength",
+            "X_first_value",
+            "X_last_value",
+        ],
+        "X: LoRA Batch, Y: Model Strength": [
+            "lora_name",
+            "model_strength",
+            "X_first_value",
+            "X_last_value",
+        ],
+        "X: LoRA Batch, Y: Clip Strength": [
+            "lora_name",
+            "clip_strength",
+            "X_first_value",
+            "X_last_value",
+        ],
+        "X: Model Strength, Y: Clip Strength": [
+            ...X_BATCH,
+            "model_strength",
+            "clip_strength",
+        ],
+    },
+    "XY Input: Control Net": {
+        strength: [
+            "first_start_percent",
+            "last_start_percent",
+            "first_end_percent",
+            "last_end_percent",
+            "strength",
+        ],
+        start_percent: [
+            "first_strength",
+            "last_strength",
+            "first_end_percent",
+            "last_end_percent",
+            "start_percent",
+        ],
+        end_percent: [
+            "first_strength",
+            "last_strength",
+            "first_start_percent",
+            "last_start_percent",
+            "end_percent",
+        ],
+    },
+    "XY Input: Control Net Plot": {
+        "X: Strength, Y: Start%": ["strength", "start_percent"],
+        "X: Strength, Y: End%": ["strength", "end_percent"],
+        "X: Start%, Y: Strength": ["start_percent", "strength"],
+        "X: Start%, Y: End%": ["start_percent", "end_percent"],
+        "X: End%, Y: Strength": ["end_percent", "strength"],
+        "X: End%, Y: Start%": ["end_percent", "start_percent"],
+    },
+};
+
+// --- Logic Helpers ---
+
+function handleStacker(node, count, type, mode) {
+    count = parseInt(count, 10) || 0;
+    if (mode?.includes("Batch")) count = 0;
+
+    const defs = {
         LoRA: ["lora_name", "model_str", "clip_str"],
         Checkpoint: ["ckpt_name", "clip_skip", "vae_name"],
         "LoRA Stacker": ["lora_name", "model_str", "clip_str", "lora_wt"],
-    };
+    }[type];
 
-    const baseNames = baseNamesMap[node_type];
-
-    const isBatchMode = inputModeValue.includes("Batch");
-    if (isBatchMode) {
-        countValue = 0;
-    }
+    if (!defs) return;
 
     for (let i = 1; i <= 50; i++) {
-        const nameWidget = findWidgetByName(node, `${baseNames[0]}_${i}`);
-        const firstWidget = findWidgetByName(node, `${baseNames[1]}_${i}`);
-        const secondWidget = findWidgetByName(node, `${baseNames[2]}_${i}`);
-        const thirdWidget =
-            node_type === "LoRA Stacker"
-                ? findWidgetByName(node, `${baseNames[3]}_${i}`)
-                : null;
+        const active = i <= count;
+        toggleWidget(node, findWidget(node, `${defs[0]}_${i}`), active);
 
-        if (i <= countValue) {
-            toggleWidget(node, nameWidget, true, "", false);
+        let s2 = active,
+            s3 = active,
+            s4 = active;
 
-            if (node_type === "LoRA Stacker") {
-                if (inputModeValue === "simple") {
-                    toggleWidget(node, firstWidget, false, "", false); // model_str
-                    toggleWidget(node, secondWidget, false, "", false); // clip_str
-                    toggleWidget(node, thirdWidget, true, "", false); // lora_wt
-                } else if (inputModeValue === "advanced") {
-                    toggleWidget(node, firstWidget, true, "", false); // model_str
-                    toggleWidget(node, secondWidget, true, "", false); // clip_str
-                    toggleWidget(node, thirdWidget, false, "", false); // lora_wt
-                }
-            } else if (node_type === "Checkpoint") {
-                if (inputModeValue.includes("ClipSkip")) {
-                    toggleWidget(node, firstWidget, true, "", false);
-                }
-                if (inputModeValue.includes("VAE")) {
-                    toggleWidget(node, secondWidget, true, "", false);
-                }
-            } else if (node_type === "LoRA") {
-                if (inputModeValue.includes("Weights")) {
-                    toggleWidget(node, firstWidget, true, "", false);
-                    toggleWidget(node, secondWidget, true, "", false);
-                }
-            }
-        } else {
-            toggleWidget(node, nameWidget, false, "", false);
-            toggleWidget(node, firstWidget, false, "", false);
-            toggleWidget(node, secondWidget, false, "", false);
-            if (thirdWidget) {
-                toggleWidget(node, thirdWidget, false, "", false);
-            }
+        if (type === "LoRA Stacker") {
+            s2 = s3 = mode === "advanced" && active;
+            s4 = mode === "simple" && active;
+        } else if (type === "Checkpoint") {
+            s2 = active && mode.includes("ClipSkip");
+            s3 = active && mode.includes("VAE");
+        } else if (type === "LoRA") {
+            s2 = s3 = active && mode.includes("Weights");
         }
-    }
 
-    const newHeight = node.computeSize()[1];
-    node.setSize([node.size[0], newHeight]);
-    app.graph?.setDirtyCanvas(true, true);
+        toggleWidget(node, findWidget(node, `${defs[1]}_${i}`), s2);
+        if (defs[2])
+            toggleWidget(node, findWidget(node, `${defs[2]}_${i}`), s3);
+        if (defs[3])
+            toggleWidget(node, findWidget(node, `${defs[3]}_${i}`), s4);
+    }
+    resizeNode(node);
 }
 
-// Sampler & Scheduler XY input visibility logic
-function handleSamplerSchedulerVisibility(node, countValue, targetParameter) {
+function handleSampler(node) {
+    const target = findWidget(node, "target_parameter")?.value;
+    const count = parseInt(findWidget(node, "input_count")?.value || 0, 10);
+    const showAll = target === "sampler & scheduler";
+
     for (let i = 1; i <= 50; i++) {
-        const samplerWidget = findWidgetByName(node, `sampler_${i}`);
-        const schedulerWidget = findWidgetByName(node, `scheduler_${i}`);
-
-        if (i <= countValue) {
-            if (targetParameter === "sampler") {
-                toggleWidget(node, samplerWidget, true, "", false);
-                toggleWidget(node, schedulerWidget, false, "", false);
-            } else if (targetParameter === "scheduler") {
-                toggleWidget(node, samplerWidget, false, "", false);
-                toggleWidget(node, schedulerWidget, true, "", false);
-            } else {
-                // targetParameter is "sampler & scheduler"
-                toggleWidget(node, samplerWidget, true, "", false);
-                toggleWidget(node, schedulerWidget, true, "", false);
-            }
-        } else {
-            toggleWidget(node, samplerWidget, false, "", false);
-            toggleWidget(node, schedulerWidget, false, "", false);
-        }
+        const active = i <= count;
+        toggleWidget(
+            node,
+            findWidget(node, `sampler_${i}`),
+            active && (showAll || target === "sampler"),
+        );
+        toggleWidget(
+            node,
+            findWidget(node, `scheduler_${i}`),
+            active && (showAll || target === "scheduler"),
+        );
     }
-
-    const newHeight = node.computeSize()[1];
-    node.setSize([node.size[0], newHeight]);
-    app.graph?.setDirtyCanvas(true, true);
+    resizeNode(node);
 }
 
-// Handle simple widget visibility based on a count
-function handleWidgetVisibility(
-    node,
-    thresholdValue,
-    widgetNamePrefix,
-    maxCount,
-) {
-    for (let i = 1; i <= maxCount; i++) {
-        const widget = findWidgetByName(node, `${widgetNamePrefix}${i}`);
-        if (widget) {
-            toggleWidget(node, widget, i <= thresholdValue, "", false);
-        }
+function handleGenericRange(node, prefix, count, cond = true) {
+    const c = parseInt(count, 10) || 0;
+    for (let i = 1; i <= 50; i++) {
+        toggleWidget(node, findWidget(node, `${prefix}${i}`), cond && i <= c);
     }
-    const newHeight = node.computeSize()[1];
-    node.setSize([node.size[0], newHeight]);
-    app.graph?.setDirtyCanvas(true, true);
+    resizeNode(node);
 }
 
-// Disable the 'Ckpt Name+ClipSkip+VAE' option if 'target_ckpt' is "Refiner"
+function handleHiRes(node) {
+    const type = findWidget(node, "upscale_type")?.value;
+    const sameSeed = findWidget(node, "use_same_seed")?.value === true;
+    const useCN = findWidget(node, "use_controlnet")?.value === true;
+    const cnValid = findWidget(node, "use_controlnet")?.value !== "_";
+
+    const isLatent = type !== "pixel";
+    const isPixel = type !== "latent";
+
+    // Core Widgets
+    toggleWidget(node, findWidget(node, "pixel_upscaler"), isPixel);
+    [
+        "hires_ckpt_name",
+        "latent_upscaler",
+        "use_same_seed",
+        "hires_steps",
+        "denoise",
+        "iterations",
+    ].forEach((n) => toggleWidget(node, findWidget(node, n), isLatent));
+
+    // Seed Control
+    const seedShow = isLatent && !sameSeed;
+    toggleWidget(node, findWidget(node, "seed"), seedShow);
+
+    ensureSeedControl(node, (btn) => {
+        toggleWidget(node, btn, seedShow);
+        btn.disabled = !seedShow;
+    });
+
+    // ControlNet
+    const showCN = isLatent && cnValid;
+    toggleWidget(node, findWidget(node, "use_controlnet"), isLatent);
+
+    [
+        "control_net_name",
+        "strength",
+        "preprocessor",
+        "preprocessor_imgs",
+    ].forEach((n) => toggleWidget(node, findWidget(node, n), showCN && useCN));
+
+    resizeNode(node);
+}
+
 function xyCkptRefinerOptionsRemove(widget, node) {
-    let target_ckpt = findWidgetByName(node, "target_ckpt").value;
-    let input_mode = widget.value;
+    const target_ckpt = findWidget(node, "target_ckpt").value;
+    const input_mode = widget.value;
 
     if (input_mode === "Ckpt Names+ClipSkip+VAE" && target_ckpt === "Refiner") {
         if (widget.last_ckpt_input_mode === "Ckpt Names+ClipSkip") {
-            if (widget.last_target_ckpt === "Refiner") {
-                widget.value = "Checkpoint Batch";
-            } else {
-                widget.value = "Ckpt Names+ClipSkip";
-            }
+            widget.value =
+                widget.last_target_ckpt === "Refiner"
+                    ? "Checkpoint Batch"
+                    : "Ckpt Names+ClipSkip";
         } else if (widget.last_ckpt_input_mode === "Checkpoint Batch") {
-            if (widget.last_target_ckpt === "Refiner") {
-                widget.value = "Ckpt Names+ClipSkip";
-            } else {
-                widget.value = "Checkpoint Batch";
-            }
-        } else if (typeof widget.last_ckpt_input_mode !== "undefined") {
+            widget.value =
+                widget.last_target_ckpt === "Refiner"
+                    ? "Ckpt Names+ClipSkip"
+                    : "Checkpoint Batch";
+        } else if (widget.last_ckpt_input_mode !== undefined) {
             widget.value = widget.last_ckpt_input_mode;
         } else {
             widget.value = "Ckpt Names";
@@ -401,441 +327,185 @@ function xyCkptRefinerOptionsRemove(widget, node) {
     widget.last_target_ckpt = target_ckpt;
 }
 
-// Create a map of node titles to their respective widget handlers
-const nodeWidgetHandlers = {
+// --- Handlers Map ---
+
+const HANDLERS = {
     "Efficient Loader": {
-        lora_name: handleEfficientLoaderLoraName,
+        lora_name: (n, w) => {
+            const s = w.value !== "None";
+            toggleWidget(n, findWidget(n, "lora_model_strength"), s);
+            toggleWidget(n, findWidget(n, "lora_clip_strength"), s);
+            resizeNode(n);
+        },
     },
     "Eff. Loader SDXL": {
-        refiner_ckpt_name: handleEffLoaderSDXLRefinerCkptName,
+        refiner_ckpt_name: (n, w) => {
+            const s = w.value !== "None";
+            ["refiner_clip_skip", "positive_ascore", "negative_ascore"].forEach(
+                (x) => toggleWidget(n, findWidget(n, x), s),
+            );
+            resizeNode(n);
+        },
     },
     "LoRA Stacker": {
-        input_mode: handleLoRAStackerInputMode,
-        lora_count: handleLoRAStackerLoraCount,
+        input_mode: (n, w) =>
+            handleStacker(
+                n,
+                findWidget(n, "lora_count")?.value,
+                "LoRA Stacker",
+                w.value,
+            ),
+        lora_count: (n, w) =>
+            handleStacker(
+                n,
+                w.value,
+                "LoRA Stacker",
+                findWidget(n, "input_mode")?.value,
+            ),
     },
     "XY Input: Steps": {
-        target_parameter: handleXYInputStepsTargetParameter,
+        target_parameter: (n, w) =>
+            updateGroupVisibility(n, VISIBILITY_MAPS[n.comfyClass], w.value),
     },
     "XY Input: Sampler/Scheduler": {
-        target_parameter: handleXYInputSamplerSchedulerTargetParameter,
-        input_count: handleXYInputSamplerSchedulerInputCount,
+        target_parameter: (n) => handleSampler(n),
+        input_count: (n) => handleSampler(n),
     },
     "XY Input: VAE": {
-        input_mode: handleXYInputVAEInputMode,
-        vae_count: handleXYInputVAEVaeCount,
+        input_mode: (n, w) => {
+            updateGroupVisibility(n, VISIBILITY_MAPS[n.comfyClass], w.value);
+            handleGenericRange(
+                n,
+                "vae_name_",
+                findWidget(n, "vae_count")?.value,
+                w.value === "VAE Names",
+            );
+        },
+        vae_count: (n, w) =>
+            handleGenericRange(
+                n,
+                "vae_name_",
+                w.value,
+                findWidget(n, "input_mode")?.value === "VAE Names",
+            ),
     },
     "XY Input: Prompt S/R": {
-        replace_count: handleXYInputPromptSRReplaceCount,
+        replace_count: (n, w) => handleGenericRange(n, "replace_", w.value),
     },
     "XY Input: Checkpoint": {
-        input_mode: handleXYInputCheckpointInputMode,
-        ckpt_count: handleXYInputCheckpointCkptCount,
-        target_ckpt: handleXYInputCheckpointTargetCkpt,
+        input_mode: (n, w) => {
+            xyCkptRefinerOptionsRemove(w, n);
+            updateGroupVisibility(n, VISIBILITY_MAPS[n.comfyClass], w.value);
+            handleStacker(
+                n,
+                findWidget(n, "ckpt_count")?.value,
+                "Checkpoint",
+                w.value,
+            );
+        },
+        ckpt_count: (n, w) =>
+            handleStacker(
+                n,
+                w.value,
+                "Checkpoint",
+                findWidget(n, "input_mode")?.value,
+            ),
+        target_ckpt: (n, w) =>
+            xyCkptRefinerOptionsRemove(findWidget(n, "input_mode"), n),
     },
     "XY Input: LoRA": {
-        input_mode: handleXYInputLoRAInputMode,
-        lora_count: handleXYInputLoRALoraCount,
+        input_mode: (n, w) => {
+            updateGroupVisibility(n, VISIBILITY_MAPS[n.comfyClass], w.value);
+            handleStacker(
+                n,
+                findWidget(n, "lora_count")?.value,
+                "LoRA",
+                w.value,
+            );
+        },
+        lora_count: (n, w) =>
+            handleStacker(
+                n,
+                w.value,
+                "LoRA",
+                findWidget(n, "input_mode")?.value,
+            ),
     },
     "XY Input: LoRA Plot": {
-        input_mode: handleXYInputLoRAPlotInputMode,
+        input_mode: (n, w) =>
+            updateGroupVisibility(n, VISIBILITY_MAPS[n.comfyClass], w.value),
     },
     "XY Input: LoRA Stacks": {
-        node_state: handleXYInputLoRAStacksNodeState,
+        node_state: (n, w) => toggleWidget(n, w, false),
     },
     "XY Input: Control Net": {
-        target_parameter: handleXYInputControlNetTargetParameter,
+        target_parameter: (n, w) =>
+            updateGroupVisibility(n, VISIBILITY_MAPS[n.comfyClass], w.value),
     },
     "XY Input: Control Net Plot": {
-        plot_type: handleXYInputControlNetPlotPlotType,
+        plot_type: (n, w) =>
+            updateGroupVisibility(n, VISIBILITY_MAPS[n.comfyClass], w.value),
     },
     "Noise Control Script": {
-        add_seed_noise: handleNoiseControlScript,
+        add_seed_noise: (n, w) => {
+            const s = w.value === true;
+            toggleWidget(n, findWidget(n, "seed"), s);
+            toggleWidget(n, findWidget(n, "weight"), s);
+            ensureSeedControl(n, (btn) => {
+                toggleWidget(n, btn, s);
+                btn.disabled = !s;
+            });
+            resizeNode(n);
+        },
     },
     "HighRes-Fix Script": {
-        upscale_type: handleHiResFixScript,
-        use_same_seed: handleHiResFixScript,
-        use_controlnet: handleHiResFixScript,
+        upscale_type: (n) => handleHiRes(n),
+        use_same_seed: (n) => handleHiRes(n),
+        use_controlnet: (n) => handleHiRes(n),
     },
     "Tiled Upscaler Script": {
-        use_controlnet: handleTiledUpscalerScript,
+        use_controlnet: (n, w) => {
+            const s = w.value === true;
+            toggleWidget(n, findWidget(n, "tile_controlnet"), s);
+            toggleWidget(n, findWidget(n, "strength"), s);
+            resizeNode(n);
+        },
     },
 };
 
-// In the main function where widgetLogic is called
-function widgetLogic(node, widget) {
-    // Retrieve the handler for the current node title and widget name
-    const handler = nodeWidgetHandlers[node.comfyClass]?.[widget.name];
-    if (handler) {
-        handler(node, widget);
-    }
-}
-
-// Efficient Loader Handlers
-function handleEfficientLoaderLoraName(node, widget) {
-    if (widget.value === "None") {
-        toggleWidget_2(node, findWidgetByName(node, "lora_model_strength"));
-        toggleWidget_2(node, findWidgetByName(node, "lora_clip_strength"));
-    } else {
-        toggleWidget_2(
-            node,
-            findWidgetByName(node, "lora_model_strength"),
-            true,
-        );
-        toggleWidget_2(
-            node,
-            findWidgetByName(node, "lora_clip_strength"),
-            true,
-        );
-    }
-}
-
-// Eff. Loader SDXL Handlers
-function handleEffLoaderSDXLRefinerCkptName(node, widget) {
-    if (widget.value === "None") {
-        toggleWidget_2(node, findWidgetByName(node, "refiner_clip_skip"));
-        toggleWidget_2(node, findWidgetByName(node, "positive_ascore"));
-        toggleWidget_2(node, findWidgetByName(node, "negative_ascore"));
-    } else {
-        toggleWidget_2(node, findWidgetByName(node, "refiner_clip_skip"), true);
-        toggleWidget_2(node, findWidgetByName(node, "positive_ascore"), true);
-        toggleWidget_2(node, findWidgetByName(node, "negative_ascore"), true);
-    }
-}
-
-// Noise Control Script Seed Handler
-function handleNoiseControlScript(node, widget) {
-    function ensureSeedControlExists(callback) {
-        if (node.seedControl && node.seedControl.lastSeedButton) {
-            callback();
-        } else {
-            setTimeout(() => ensureSeedControlExists(callback), 0);
-        }
-    }
-
-    ensureSeedControlExists(() => {
-        if (widget.value === false) {
-            toggleWidget(node, findWidgetByName(node, "seed"));
-            toggleWidget(node, findWidgetByName(node, "weight"));
-            toggleWidget(node, node.seedControl.lastSeedButton);
-            node.seedControl.lastSeedButton.disabled = true; // Disable the button
-        } else {
-            toggleWidget(node, findWidgetByName(node, "seed"), true);
-            toggleWidget(node, findWidgetByName(node, "weight"), true);
-            node.seedControl.lastSeedButton.disabled = false; // Enable the button
-            toggleWidget(node, node.seedControl.lastSeedButton, true);
-        }
-    });
-}
-
-/// HighRes-Fix Script Handlers
-function handleHiResFixScript(node, widget) {
-    function ensureSeedControlExists(callback) {
-        if (node.seedControl && node.seedControl.lastSeedButton) {
-            callback();
-        } else {
-            setTimeout(() => ensureSeedControlExists(callback), 0);
-        }
-    }
-
-    if (findWidgetByName(node, "upscale_type").value === "latent") {
-        toggleWidget(node, findWidgetByName(node, "pixel_upscaler"));
-
-        toggleWidget(node, findWidgetByName(node, "hires_ckpt_name"), true);
-        toggleWidget(node, findWidgetByName(node, "latent_upscaler"), true);
-        toggleWidget(node, findWidgetByName(node, "use_same_seed"), true);
-        toggleWidget(node, findWidgetByName(node, "hires_steps"), true);
-        toggleWidget(node, findWidgetByName(node, "denoise"), true);
-        toggleWidget(node, findWidgetByName(node, "iterations"), true);
-
-        ensureSeedControlExists(() => {
-            if (findWidgetByName(node, "use_same_seed").value == true) {
-                toggleWidget(node, findWidgetByName(node, "seed"));
-                toggleWidget(node, node.seedControl.lastSeedButton);
-                node.seedControl.lastSeedButton.disabled = true; // Disable the button
-            } else {
-                toggleWidget(node, findWidgetByName(node, "seed"), true);
-                node.seedControl.lastSeedButton.disabled = false; // Enable the button
-                toggleWidget(node, node.seedControl.lastSeedButton, true);
-            }
-        });
-
-        if (findWidgetByName(node, "use_controlnet").value == "_") {
-            toggleWidget(node, findWidgetByName(node, "use_controlnet"));
-            toggleWidget(node, findWidgetByName(node, "control_net_name"));
-            toggleWidget(node, findWidgetByName(node, "strength"));
-            toggleWidget(node, findWidgetByName(node, "preprocessor"));
-            toggleWidget(node, findWidgetByName(node, "preprocessor_imgs"));
-        } else {
-            toggleWidget(node, findWidgetByName(node, "use_controlnet"), true);
-
-            if (findWidgetByName(node, "use_controlnet").value == true) {
-                toggleWidget(
-                    node,
-                    findWidgetByName(node, "control_net_name"),
-                    true,
-                );
-                toggleWidget(node, findWidgetByName(node, "strength"), true);
-                toggleWidget(
-                    node,
-                    findWidgetByName(node, "preprocessor"),
-                    true,
-                );
-                toggleWidget(
-                    node,
-                    findWidgetByName(node, "preprocessor_imgs"),
-                    true,
-                );
-            } else {
-                toggleWidget(node, findWidgetByName(node, "control_net_name"));
-                toggleWidget(node, findWidgetByName(node, "strength"));
-                toggleWidget(node, findWidgetByName(node, "preprocessor"));
-                toggleWidget(node, findWidgetByName(node, "preprocessor_imgs"));
-            }
-        }
-    } else if (findWidgetByName(node, "upscale_type").value === "pixel") {
-        toggleWidget(node, findWidgetByName(node, "hires_ckpt_name"));
-        toggleWidget(node, findWidgetByName(node, "latent_upscaler"));
-        toggleWidget(node, findWidgetByName(node, "use_same_seed"));
-        toggleWidget(node, findWidgetByName(node, "hires_steps"));
-        toggleWidget(node, findWidgetByName(node, "denoise"));
-        toggleWidget(node, findWidgetByName(node, "iterations"));
-        toggleWidget(node, findWidgetByName(node, "seed"));
-        ensureSeedControlExists(() => {
-            toggleWidget(node, node.seedControl.lastSeedButton);
-            node.seedControl.lastSeedButton.disabled = true; // Disable the button
-        });
-        toggleWidget(node, findWidgetByName(node, "use_controlnet"));
-        toggleWidget(node, findWidgetByName(node, "control_net_name"));
-        toggleWidget(node, findWidgetByName(node, "strength"));
-        toggleWidget(node, findWidgetByName(node, "preprocessor"));
-        toggleWidget(node, findWidgetByName(node, "preprocessor_imgs"));
-
-        toggleWidget(node, findWidgetByName(node, "pixel_upscaler"), true);
-    } else if (findWidgetByName(node, "upscale_type").value === "both") {
-        toggleWidget(node, findWidgetByName(node, "pixel_upscaler"), true);
-        toggleWidget(node, findWidgetByName(node, "hires_ckpt_name"), true);
-        toggleWidget(node, findWidgetByName(node, "latent_upscaler"), true);
-        toggleWidget(node, findWidgetByName(node, "use_same_seed"), true);
-        toggleWidget(node, findWidgetByName(node, "hires_steps"), true);
-        toggleWidget(node, findWidgetByName(node, "denoise"), true);
-        toggleWidget(node, findWidgetByName(node, "iterations"), true);
-
-        ensureSeedControlExists(() => {
-            if (findWidgetByName(node, "use_same_seed").value == true) {
-                toggleWidget(node, findWidgetByName(node, "seed"));
-                toggleWidget(node, node.seedControl.lastSeedButton);
-                node.seedControl.lastSeedButton.disabled = true; // Disable the button
-            } else {
-                toggleWidget(node, findWidgetByName(node, "seed"), true);
-                node.seedControl.lastSeedButton.disabled = false; // Enable the button
-                toggleWidget(node, node.seedControl.lastSeedButton, true);
-            }
-        });
-
-        if (findWidgetByName(node, "use_controlnet").value == "_") {
-            toggleWidget(node, findWidgetByName(node, "use_controlnet"));
-            toggleWidget(node, findWidgetByName(node, "control_net_name"));
-            toggleWidget(node, findWidgetByName(node, "strength"));
-            toggleWidget(node, findWidgetByName(node, "preprocessor"));
-            toggleWidget(node, findWidgetByName(node, "preprocessor_imgs"));
-        } else {
-            toggleWidget(node, findWidgetByName(node, "use_controlnet"), true);
-
-            if (findWidgetByName(node, "use_controlnet").value == true) {
-                toggleWidget(
-                    node,
-                    findWidgetByName(node, "control_net_name"),
-                    true,
-                );
-                toggleWidget(node, findWidgetByName(node, "strength"), true);
-                toggleWidget(
-                    node,
-                    findWidgetByName(node, "preprocessor"),
-                    true,
-                );
-                toggleWidget(
-                    node,
-                    findWidgetByName(node, "preprocessor_imgs"),
-                    true,
-                );
-            } else {
-                toggleWidget(node, findWidgetByName(node, "control_net_name"));
-                toggleWidget(node, findWidgetByName(node, "strength"));
-                toggleWidget(node, findWidgetByName(node, "preprocessor"));
-                toggleWidget(node, findWidgetByName(node, "preprocessor_imgs"));
-            }
-        }
-    }
-}
-
-/// Tiled Upscaler Script Handler
-function handleTiledUpscalerScript(node, widget) {
-    if (findWidgetByName(node, "use_controlnet").value == true) {
-        toggleWidget(node, findWidgetByName(node, "tile_controlnet"), true);
-        toggleWidget(node, findWidgetByName(node, "strength"), true);
-    } else {
-        toggleWidget(node, findWidgetByName(node, "tile_controlnet"));
-        toggleWidget(node, findWidgetByName(node, "strength"));
-    }
-}
-
-// LoRA Stacker Handlers
-function handleLoRAStackerInputMode(node, widget) {
-    handleInputModeWidgetsVisibility(node, widget.value);
-    handleVisibility(
-        node,
-        findWidgetByName(node, "lora_count").value,
-        "LoRA Stacker",
-    );
-}
-
-function handleLoRAStackerLoraCount(node, widget) {
-    handleVisibility(node, widget.value, "LoRA Stacker");
-}
-
-// XY Input: Steps Handlers
-function handleXYInputStepsTargetParameter(node, widget) {
-    handleInputModeWidgetsVisibility(node, widget.value);
-}
-
-// XY Input: Sampler/Scheduler Handlers
-function handleXYInputSamplerSchedulerTargetParameter(node, widget) {
-    handleSamplerSchedulerVisibility(
-        node,
-        findWidgetByName(node, "input_count").value,
-        widget.value,
-    );
-}
-
-function handleXYInputSamplerSchedulerInputCount(node, widget) {
-    handleSamplerSchedulerVisibility(
-        node,
-        widget.value,
-        findWidgetByName(node, "target_parameter").value,
-    );
-}
-
-// XY Input: VAE Handlers
-function handleXYInputVAEInputMode(node, widget) {
-    handleInputModeWidgetsVisibility(node, widget.value);
-    if (widget.value === "VAE Names") {
-        handleWidgetVisibility(
-            node,
-            findWidgetByName(node, "vae_count").value,
-            "vae_name_",
-            50,
-        );
-    } else {
-        handleWidgetVisibility(node, 0, "vae_name_", 50);
-    }
-}
-
-function handleXYInputVAEVaeCount(node, widget) {
-    if (findWidgetByName(node, "input_mode").value === "VAE Names") {
-        handleWidgetVisibility(node, widget.value, "vae_name_", 50);
-    }
-}
-
-// XY Input: Prompt S/R Handlers
-function handleXYInputPromptSRReplaceCount(node, widget) {
-    handleWidgetVisibility(node, widget.value, "replace_", 49);
-}
-
-// XY Input: Checkpoint Handlers
-function handleXYInputCheckpointInputMode(node, widget) {
-    xyCkptRefinerOptionsRemove(widget, node);
-    handleInputModeWidgetsVisibility(node, widget.value);
-    handleVisibility(
-        node,
-        findWidgetByName(node, "ckpt_count").value,
-        "Checkpoint",
-    );
-}
-
-function handleXYInputCheckpointCkptCount(node, widget) {
-    handleVisibility(node, widget.value, "Checkpoint");
-}
-
-function handleXYInputCheckpointTargetCkpt(node, widget) {
-    xyCkptRefinerOptionsRemove(findWidgetByName(node, "input_mode"), node);
-}
-
-// XY Input: LoRA Handlers
-function handleXYInputLoRAInputMode(node, widget) {
-    handleInputModeWidgetsVisibility(node, widget.value);
-    handleVisibility(node, findWidgetByName(node, "lora_count").value, "LoRA");
-}
-
-function handleXYInputLoRALoraCount(node, widget) {
-    handleVisibility(node, widget.value, "LoRA");
-}
-
-// XY Input: LoRA Plot Handlers
-function handleXYInputLoRAPlotInputMode(node, widget) {
-    handleInputModeWidgetsVisibility(node, widget.value);
-}
-
-// XY Input: LoRA Stacks Handlers
-function handleXYInputLoRAStacksNodeState(node, widget) {
-    toggleWidget(node, findWidgetByName(node, "node_state"), false);
-}
-
-// XY Input: Control Net Handlers
-function handleXYInputControlNetTargetParameter(node, widget) {
-    handleInputModeWidgetsVisibility(node, widget.value);
-}
-
-// XY Input: Control Net Plot Handlers
-function handleXYInputControlNetPlotPlotType(node, widget) {
-    handleInputModeWidgetsVisibility(node, widget.value);
-}
+// --- Extension Registration ---
 
 app.registerExtension({
     name: "efficiency.widgethider",
     nodeCreated(node) {
-        if (!nodeWidgetHandlers[node.comfyClass]) return;
+        const nodeHandlers = HANDLERS[node.comfyClass];
+        if (!nodeHandlers) return;
+
         for (const w of node.widgets || []) {
-            if (!nodeWidgetHandlers[node.comfyClass][w.name]) continue;
-            let widgetValue = w.value;
+            if (nodeHandlers[w.name]) {
+                const descriptor = Object.getOwnPropertyDescriptor(w, "value");
+                let val = w.value;
 
-            // Store the original descriptor if it exists
-            let originalDescriptor = Object.getOwnPropertyDescriptor(
-                w,
-                "value",
-            );
-            if (!originalDescriptor) {
-                originalDescriptor = Object.getOwnPropertyDescriptor(
-                    w.constructor.prototype,
-                    "value",
-                );
+                Object.defineProperty(w, "value", {
+                    get() {
+                        return descriptor?.get ? descriptor.get.call(w) : val;
+                    },
+                    set(newVal) {
+                        if (descriptor?.set) descriptor.set.call(w, newVal);
+                        else val = newVal;
+
+                        const h = nodeHandlers[w.name];
+                        if (h) h(node, w);
+                    },
+                });
+
+                // Initial trigger
+                nodeHandlers[w.name](node, w);
             }
-
-            widgetLogic(node, w);
-
-            Object.defineProperty(w, "value", {
-                get() {
-                    // If there's an original getter, use it. Otherwise, return widgetValue.
-                    let valueToReturn =
-                        originalDescriptor && originalDescriptor.get
-                            ? originalDescriptor.get.call(w)
-                            : widgetValue;
-
-                    return valueToReturn;
-                },
-                set(newVal) {
-                    // If there's an original setter, use it. Otherwise, set widgetValue.
-                    if (originalDescriptor && originalDescriptor.set) {
-                        originalDescriptor.set.call(w, newVal);
-                    } else {
-                        widgetValue = newVal;
-                    }
-
-                    widgetLogic(node, w);
-                },
-            });
         }
+
         setTimeout(() => {
             node.widgets_initialized = true;
-        }, 500);
+        }, 100);
     },
 });
