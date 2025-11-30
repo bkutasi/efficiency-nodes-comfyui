@@ -28,17 +28,30 @@ const toggleWidget = (node, widget, show) => {
     } else {
         widget.type = HIDDEN_TAG;
         widget.computeSize = () => [0, -4];
-        widget.draw = () => {};
+        widget.draw = () => { };
     }
 
     // Handle linked widgets recursively
     widget.linkedWidgets?.forEach((w) => toggleWidget(node, w, show));
 };
 
+const toggleWidgets = (node, names, show) => {
+    names.forEach((name) => toggleWidget(node, findWidget(node, name), show));
+};
+
 const resizeNode = (node) => {
-    const newHeight = node.computeSize()[1];
-    node.setSize([node.size[0], newHeight]);
     app.graph?.setDirtyCanvas(true, true);
+    if (node.is_configuring) return;
+
+    const currentHeight = node.size[1];
+    const newHeight = node.computeSize()[1];
+    const lastHeight = node._lastComputedHeight;
+    node._lastComputedHeight = newHeight;
+
+    // If layout requirements haven't changed (computed size is same), don't touch size.
+    if (lastHeight === newHeight && currentHeight === newHeight) return;
+
+    node.setSize([node.size[0], newHeight]);
 };
 
 const updateGroupVisibility = (node, map, key) => {
@@ -283,8 +296,14 @@ function handleHiRes(node) {
     toggleWidget(node, findWidget(node, "seed"), seedShow);
 
     ensureSeedControl(node, (btn) => {
-        toggleWidget(node, btn, seedShow);
-        btn.disabled = !seedShow;
+        // Re-evaluate conditions to avoid stale closures from async retries
+        const currentType = findWidget(node, "upscale_type")?.value;
+        const currentSameSeed = findWidget(node, "use_same_seed")?.value === true;
+        const currentIsLatent = currentType !== "pixel";
+        const currentSeedShow = currentIsLatent && !currentSameSeed;
+        toggleWidget(node, btn, currentSeedShow);
+        btn.disabled = !currentSeedShow;
+        resizeNode(node);
     });
 
     // ControlNet
@@ -332,17 +351,20 @@ function xyCkptRefinerOptionsRemove(widget, node) {
 const HANDLERS = {
     "Efficient Loader": {
         lora_name: (n, w) => {
-            const s = w.value !== "None";
-            toggleWidget(n, findWidget(n, "lora_model_strength"), s);
-            toggleWidget(n, findWidget(n, "lora_clip_strength"), s);
+            toggleWidgets(
+                n,
+                ["lora_model_strength", "lora_clip_strength"],
+                w.value !== "None",
+            );
             resizeNode(n);
         },
     },
     "Eff. Loader SDXL": {
         refiner_ckpt_name: (n, w) => {
-            const s = w.value !== "None";
-            ["refiner_clip_skip", "positive_ascore", "negative_ascore"].forEach(
-                (x) => toggleWidget(n, findWidget(n, x), s),
+            toggleWidgets(
+                n,
+                ["refiner_clip_skip", "positive_ascore", "negative_ascore"],
+                w.value !== "None",
             );
             resizeNode(n);
         },
@@ -465,9 +487,7 @@ const HANDLERS = {
     },
     "Tiled Upscaler Script": {
         use_controlnet: (n, w) => {
-            const s = w.value === true;
-            toggleWidget(n, findWidget(n, "tile_controlnet"), s);
-            toggleWidget(n, findWidget(n, "strength"), s);
+            toggleWidgets(n, ["tile_controlnet", "strength"], w.value === true);
             resizeNode(n);
         },
     },
@@ -480,6 +500,37 @@ app.registerExtension({
     nodeCreated(node) {
         const nodeHandlers = HANDLERS[node.comfyClass];
         if (!nodeHandlers) return;
+
+
+
+        // Initialize last computed height to prevent unnecessary resizing on first load
+        if (node.computeSize) {
+            node._lastComputedHeight = node.computeSize()[1];
+        }
+
+        const origConfigure = node.configure;
+        node.configure = function () {
+            node.is_configuring = true;
+            const r = origConfigure
+                ? origConfigure.apply(this, arguments)
+                : undefined;
+
+            // Trigger handlers to update visibility based on loaded values
+            for (const w of node.widgets || []) {
+                if (nodeHandlers[w.name]) {
+                    nodeHandlers[w.name](node, w);
+                }
+            }
+
+            node.is_configuring = false;
+
+            // Force resize for HighRes-Fix Script to fix initialization size issue
+            if (node.comfyClass === "HighRes-Fix Script") {
+                resizeNode(node);
+            }
+
+            return r;
+        };
 
         for (const w of node.widgets || []) {
             if (nodeHandlers[w.name]) {
@@ -503,9 +554,5 @@ app.registerExtension({
                 nodeHandlers[w.name](node, w);
             }
         }
-
-        setTimeout(() => {
-            node.widgets_initialized = true;
-        }, 100);
     },
 });
